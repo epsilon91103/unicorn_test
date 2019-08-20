@@ -4,7 +4,7 @@ import itertools
 import argparse
 import json
 
-from aiohttp import ClientSession
+from aiohttp import ClientSession, web
 
 from class_service import BaseService
 
@@ -13,14 +13,18 @@ logging.basicConfig(
     format='%(filename)s[LINE:%(lineno)d]# %(levelname)-8s [%(asctime)s]  %(message)s'
 )
 
+HOST = '127.0.0.1'
+PORT = 8080
 # ссылка на ресурс для получения валют
 URL = 'https://www.cbr-xml-daily.ru/daily_json.js'
 # список валют для сервиса
 CODE_CURRENCIES = ('RUB', 'USD', 'EUR')
 # множество положительных значений debug для его активации
 DEBUG_TRUE_VALUES = frozenset(('1', 'True', 'true', 'y', 'Y'))
-# период сна информирующего метода сервиса
+# период сна информирующего метода сервиса (секунд)
 SLEEP_INFO_METHOD = 60
+# период сна метода парсинга (минут)
+SLEEP_PARS_METHOD = 5
 
 
 class Service(BaseService):
@@ -74,6 +78,8 @@ class Service(BaseService):
                 try:
                     # получаем новые данные
                     async with session.get(URL) as response:
+                        if self.debug_mode:
+                            logging.info('Response %s' % response)
                         page = await response.read()
                     logging.info('Currency data successfully received')
                 except Exception as err:
@@ -113,6 +119,63 @@ class Service(BaseService):
                 logging.debug('Updated information is displayed in the console')
             await asyncio.sleep(SLEEP_INFO_METHOD)
 
+    # реализация обработки гет метода
+    async def get_handler(self, request):
+        code = request.match_info.get('valute')
+
+        if code is None:
+            if self.debug_mode:
+                logging.info('Request a nonexistent page')
+            return web.Response(status=404)
+
+        code = code.upper()
+        answ = text_debug = ''
+        if code in self.code_currencies:
+            text_debug = 'Currency request {}'.format(code)
+            answ = "{}: {}".format(code, self.currencies[code])
+        elif code == 'AMOUNT':
+            self.create_message()
+            text_debug = 'Request for information on all currencies'
+            answ = self.msg
+
+        if self.debug_mode:
+            logging.info(text_debug)
+
+        return web.Response(
+            text=answ,
+            content_type='text/plain'
+        )
+
+    # реализация обработки post метода modify
+    async def post_handler(self, request):
+        data = await request.post()
+        path = request.path
+        update = False
+
+        for key in data:
+            try:
+                key_up = key.upper()
+                if key_up in self.currency_amount:
+                    if path == '/modify':
+                        self.currency_amount[key_up] += float(data[key])
+                    elif path == '/amount/set':
+                        self.currency_amount[key_up] = float(data[key])
+                    update = True
+            except Exception as err:
+                logging.debug('Invalid currency code {}: {}'.format(key, err))
+
+        if update:
+            self.calculate_currency_ratio()
+            self.calculate_total_amount()
+            text = 'Changes successfully accepted'
+        else:
+            text = 'No changes applied'
+
+        return web.Response(
+            text=text,
+            content_type='text/plain'
+        )
+
     # запуск сервиса
     def start_service(self):
         logging.debug('Start application')
@@ -120,12 +183,23 @@ class Service(BaseService):
             logging.debug('Debug mode enabled')
 
         loop = asyncio.get_event_loop()
-        tasks = [
-            asyncio.ensure_future(self.parse_currencies()),
-            asyncio.ensure_future(self.print_currency()),
-        ]
-        loop.run_until_complete(asyncio.wait(tasks))
+
+        loop.create_task(self.parse_currencies())
+        loop.create_task(self.print_currency())
+
+        app = web.Application()
+        app.router.add_get('/{valute}/get', self.get_handler)
+        app.router.add_post('/amount/set', self.post_handler)
+        app.router.add_post('/modify', self.post_handler)
+
+        if self.debug_mode:
+            web.run_app(app, host=HOST, port=PORT)
+        else:
+            web.run_app(app, host=HOST, port=PORT, access_log=None)
+
+        loop.run_forever()
         loop.close()
+
         logging.debug('Application shutdown')
 
     # генерация текстового представления словаря
@@ -144,7 +218,7 @@ def parse_args():
     parser.add_argument(
         '--period',
         type=int,
-        default=5,
+        default=SLEEP_PARS_METHOD,
         help='Exchange Rate Query Frequency',
     )
     parser.add_argument(
