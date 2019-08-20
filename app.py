@@ -39,7 +39,7 @@ class Service(BaseService):
         self.debug_mode = arguments.debug in DEBUG_TRUE_VALUES
         self.msg = None
         self.close_service = False
-        for curr in CODE_CURRENCIES:
+        for curr in self.code_currencies:
             self.currency_amount[curr] = vars(arguments)[curr.lower()]
         self.n = arguments.period * 60
 
@@ -146,7 +146,7 @@ class Service(BaseService):
             content_type='text/plain'
         )
 
-    # реализация обработки post метода modify
+    # реализация обработки post метода modify и amount
     async def post_handler(self, request):
         data = await request.json()
         path = request.path
