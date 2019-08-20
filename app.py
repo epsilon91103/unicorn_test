@@ -148,7 +148,7 @@ class Service(BaseService):
 
     # реализация обработки post метода modify
     async def post_handler(self, request):
-        data = await request.post()
+        data = await request.json()
         path = request.path
         update = False
 
